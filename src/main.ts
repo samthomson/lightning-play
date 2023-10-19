@@ -3,13 +3,14 @@ import * as protoLoader from '@grpc/proto-loader';
 import * as fs from 'fs';
 import * as QRCodeTerminal from 'qrcode-terminal'
 
-const packageDefinition = protoLoader.loadSync('./lightning.proto', {
+const loaderOptions = {
   keepCase: true,
   defaults: true,
   oneofs: true,
-});
+}
 
-const lnrpc: any = grpc.loadPackageDefinition(packageDefinition).lnrpc;
+const lnrpc: any = grpc.loadPackageDefinition(protoLoader.loadSync(['lightning.proto'], loaderOptions)).lnrpc;
+const invoicesrpc: any = grpc.loadPackageDefinition(protoLoader.loadSync(['lightning.proto', 'invoicesrpc/invoices.proto'], loaderOptions)).invoicesrpc;
 
 const macaroon = fs.readFileSync('./invoice.macaroon').toString('hex');
 const metadata = new grpc.Metadata();
@@ -27,21 +28,23 @@ var credentials = grpc.credentials.combineChannelCredentials(sslCreds, macaroonC
 // console.log('macaroon', macaroon);
 // console.log('metadata', metadata);
 
-const lnd = new lnrpc.Lightning('umbrel.local:10009', credentials);
+const GRPC = 'umbrel.local:10009'
+const lnd = new lnrpc.Lightning(GRPC, credentials);
+const invoiceClient = new invoicesrpc.Invoices(GRPC, credentials);
 
 let request = {
 	show: true,
 	level_spec: "info",
-  };
+};
 // @ts-ignore
-// lnd.debugLevel(request, function(err, response) {
-// 	if (err) {
-// 		console.error('debug err', err)
-// 	}
-// 	if (response) {
-// 		console.log('debug response', response);
-// 	}
-// });
+lnd.debugLevel(request, function(err, response) {
+	if (err) {
+		console.error('debug err', err)
+	}
+	if (response) {
+		console.log('debug response', response);
+	}
+});
 
 const addInvoice = () => {
 
@@ -53,12 +56,21 @@ const addInvoice = () => {
 	};
 	console.log('will attempt to make an invoice for', invoice);
 
-	lnd.addInvoice(invoice, (error: any, response: {payment_request: string}) => {
+	lnd.addInvoice(invoice, (error: any, response: {payment_request: string, r_hash: string}) => {
 		if (error) {
 		  console.error(error);
 		  return;
 		}
-		console.log('response', response);
+		console.log('add invoice response', response);
+
+		let request = {
+			r_hash: response.r_hash,
+		}
+		let call = invoiceClient.subscribeSingleInvoice(request);
+		call.on('data', (response: any) => {
+			// A response was received from the server.
+			console.log('subscription info', response);
+		})
 		renderQRCode(response.payment_request)
 	});
 }
@@ -94,8 +106,8 @@ const renderQRCode = (data: string) => {
 }
 
 const main = () => {
-	// addInvoice();
-	listInvoices()
+	addInvoice();
+	// listInvoices()
 }
 
 main()
